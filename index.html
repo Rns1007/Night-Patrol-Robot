@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>ESP32 Sensor Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      --bg: #1f1f2e;
+      --text: #ffffff;
+      --card: #2c2d3a;
+      --accent: #00c8ff;
+      --border: rgba(255, 255, 255, 0.08);
+    }
+
+    body.light-mode {
+      --bg: #f4f4f9;
+      --text: #1e1e1e;
+      --card: #ffffff;
+      --accent: #0078d7;
+      --border: rgba(0, 0, 0, 0.1);
+    }
+
+    body {
+      font-family: 'Poppins', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 40px 20px;
+      transition: background 0.4s, color 0.4s;
+    }
+
+    h2 {
+      text-align: center;
+      font-size: 28px;
+      color: var(--accent);
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .status {
+      text-align: center;
+      margin-bottom: 30px;
+      font-size: 15px;
+      color: #4eff7c;
+    }
+
+    .card {
+      background: var(--card);
+      border-radius: 20px;
+      padding: 25px;
+      margin: 20px auto;
+      max-width: 950px;
+      border: 1px solid var(--border);
+      box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+      transition: background 0.4s, border 0.4s;
+    }
+
+    .data-text {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 20px;
+    }
+
+    .charts-container {
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 30px;
+    }
+
+    .horizontal-section {
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+    
+
+    canvas {
+      border-radius: 12px;
+      background: var(--bg);
+      padding: 12px;
+      border: 1px solid var(--border);
+      transition: background 0.4s;
+    }
+
+    iframe {
+      border-radius: 12px;
+      border: 2px solid var(--accent);
+      margin-top: 15px;
+      width: 100%;
+      max-width: 480px;
+      height: 270px;
+      display: block;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .theme-toggle {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: var(--accent);
+      border-radius: 50%;
+      width: 50px;
+      height: 50px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      cursor: pointer;
+      box-shadow: 0 6px 16px rgba(0,0,0,0.25);
+      z-index: 1000;
+      transition: transform 0.3s;
+    }
+
+    .theme-toggle:hover {
+      transform: scale(1.1);
+    }
+
+    .theme-toggle span {
+      font-size: 24px;
+      color: #fff;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="theme-toggle" onclick="toggleTheme()">
+    <span id="theme-icon">🌙</span>
+  </div>
+
+  <h2>ESP32 Sensor Dashboard</h2>
+  <p class="status" id="status">Connecting to MQTT broker...</p>
+
+  <div class="card">
+    <p class="data-text">🚶 Motion Detected: <span id="motion">--</span></p>
+  </div>
+
+  <div class="card">
+    <p class="data-text">🌡️ Temperature: <span id="tempText">--</span> °C</p>
+    <p class="data-text">💧 Humidity: <span id="humText">--</span> %</p>
+
+  </div>
+
+  <div class="card">
+    <div class="data-text">📊 Temperature & Humidity Charts + 📷 Camera Feed</div>
+    <div class="horizontal-section">
+      <canvas id="tempChart" width="300" height="200"></canvas>
+      <canvas id="humChart" width="300" height="200"></canvas>
+      <iframe src="http://192.168.137.123:81/stream" width="300" height="200"></iframe>
+    </div>
+  </div>
+  
+
+  <script>
+    function toggleTheme() {
+      document.body.classList.toggle('light-mode');
+      const icon = document.getElementById('theme-icon');
+      icon.textContent = document.body.classList.contains('light-mode') ? '☀️' : '🌙';
+    }
+
+    const client = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
+
+    client.on('connect', () => {
+      document.getElementById('status').textContent = '✅ Connected to MQTT broker';
+      client.subscribe('home/esp32/temperature');
+      client.subscribe('home/esp32/humidity');
+      client.subscribe('home/esp32/motion');
+    });
+
+    client.on('error', (err) => {
+      document.getElementById('status').textContent = '❌ MQTT connection failed';
+      console.error(err);
+    });
+
+    const maxPoints = 30;
+    const tempData = {
+      labels: [],
+      datasets: [{
+        label: 'Temperature (°C)',
+        data: [],
+        borderColor: '#ff6384',
+        backgroundColor: 'rgba(255,99,132,0.2)',
+        fill: true,
+        tension: 0.4,
+        pointRadius: 0
+      }]
+    };
+
+    const humData = {
+      labels: [],
+      datasets: [{
+        label: 'Humidity (%)',
+        data: [],
+        borderColor: '#36a2eb',
+        backgroundColor: 'rgba(54,162,235,0.2)',
+        fill: true,
+        tension: 0.4,
+        pointRadius: 0
+      }]
+    };
+
+    const chartOptions = {
+      responsive: false,
+      animation: {
+        duration: 300
+      },
+      scales: {
+        x: {
+          ticks: { maxTicksLimit: 5 }
+        },
+        y: {
+          beginAtZero: false
+        }
+      }
+    };
+
+    const tempChart = new Chart(document.getElementById('tempChart'), {
+      type: 'line',
+      data: tempData,
+      options: chartOptions
+    });
+
+    const humChart = new Chart(document.getElementById('humChart'), {
+      type: 'line',
+      data: humData,
+      options: chartOptions
+    });
+
+    function updateAxis(chart, dataArray) {
+      const min = Math.min(...dataArray);
+      const max = Math.max(...dataArray);
+      const pad = (max - min) * 0.1 || 1;
+      chart.options.scales.y.min = min - pad;
+      chart.options.scales.y.max = max + pad;
+    }
+
+    client.on('message', (topic, message) => {
+      const msg = message.toString();
+      const time = new Date().toLocaleTimeString();
+
+      if (topic.includes("temperature")) {
+        document.getElementById('tempText').textContent = msg;
+        tempData.labels.push(time);
+        tempData.datasets[0].data.push(parseFloat(msg));
+        if (tempData.labels.length > maxPoints) {
+          tempData.labels.shift();
+          tempData.datasets[0].data.shift();
+        }
+        updateAxis(tempChart, tempData.datasets[0].data);
+        tempChart.update();
+      }
+
+      if (topic.includes("humidity")) {
+        document.getElementById('humText').textContent = msg;
+        humData.labels.push(time);
+        humData.datasets[0].data.push(parseFloat(msg));
+        if (humData.labels.length > maxPoints) {
+          humData.labels.shift();
+          humData.datasets[0].data.shift();
+        }
+        updateAxis(humChart, humData.datasets[0].data);
+        humChart.update();
+      }
+
+      if (topic.includes("motion")) {
+        document.getElementById('motion').textContent = msg === "1" ? "Yes" : "No";
+      }
+    });
+  </script>
+</body>
+</html>
